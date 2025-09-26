@@ -1,1 +1,6 @@
-# No dependencies yet
+# For speech recognition
+vosk
+sounddevice
+
+# For potential future async http requests
+aiohttp

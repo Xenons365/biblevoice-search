@@ -1,32 +1,76 @@
-import time
+import asyncio
 
-def get_scripture_text(book, reference):
+# Custom exception for API errors
+class VerseNotFoundError(Exception):
+    pass
+
+# In-memory cache for scripture texts
+scripture_cache = {}
+# Dictionary to track in-flight requests to prevent race conditions
+ongoing_fetches = {}
+
+async def _fetch_from_api(book, reference):
+    """The internal function that performs the actual fetch."""
+    print(f"Cache miss. Fetching {book} {reference} from API...")
+    await asyncio.sleep(1)  # Simulate non-blocking network delay
+
+    if "99" in reference:
+        print(f"API error: Verse {book} {reference} not found.")
+        raise VerseNotFoundError(f"The verse '{book} {reference}' could not be found.")
+
+    return f'"{book} {reference}" - This is the mock text for the scripture.'
+
+async def get_scripture_text(book, reference):
     """
-    Mocks a call to a Bible API.
-
-    In a real application, this function would make an HTTP request
-    to a Bible API to get the text of the scripture.
-
-    For now, it returns a placeholder text after a short delay.
+    Asynchronously gets scripture text, with caching, error handling,
+    and protection against race conditions.
     """
-    print(f"Fetching {book} {reference} from API...")
-    time.sleep(1)  # Simulate network delay
+    cache_key = f"{book.lower()}:{reference}"
 
-    # Mocked response
-    mock_text = f'"{book} {reference}" - This is the mock text for the scripture. In a real application, this would be the actual verse from the Bible.'
+    if cache_key in scripture_cache:
+        print(f"Cache hit for {book} {reference}.")
+        cached_value = scripture_cache[cache_key]
+        if isinstance(cached_value, VerseNotFoundError):
+            raise cached_value
+        return cached_value
 
-    return mock_text
+    if cache_key in ongoing_fetches:
+        print(f"Waiting for existing fetch for {book} {reference}...")
+        return await ongoing_fetches[cache_key]
+
+    # No cache hit and no ongoing fetch, so create a new one.
+    task = asyncio.create_task(_fetch_from_api(book, reference))
+    ongoing_fetches[cache_key] = task
+
+    try:
+        result = await task
+        scripture_cache[cache_key] = result
+        return result
+    except VerseNotFoundError as e:
+        scripture_cache[cache_key] = e
+        raise e
+    finally:
+        # Once the task is complete, remove it from the ongoing fetches.
+        del ongoing_fetches[cache_key]
+
+async def main():
+    # Example usage to demonstrate async functionality:
+    print("--- Requesting multiple verses concurrently ---")
+
+    async def fetch_and_print(book, ref):
+        try:
+            text = await get_scripture_text(book, ref)
+            print(f"Success for {book} {ref}: {text}")
+        except VerseNotFoundError as e:
+            print(f"Error for {book} {ref}: {e}")
+
+    tasks = [
+        fetch_and_print("John", "3:16"),
+        fetch_and_print("Genesis", "1:99"),
+        fetch_and_print("John", "3:16"), # This should now wait for the first fetch
+    ]
+
+    await asyncio.gather(*tasks)
 
 if __name__ == '__main__':
-    # Example usage:
-    book = "John"
-    reference = "3:16"
-    text = get_scripture_text(book, reference)
-    print("API Response:")
-    print(text)
-
-    book = "1 Corinthians"
-    reference = "13:4-7"
-    text = get_scripture_text(book, reference)
-    print("\nAPI Response:")
-    print(text)
+    asyncio.run(main())

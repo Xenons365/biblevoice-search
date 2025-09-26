@@ -1,33 +1,50 @@
+import asyncio
 from scripture_finder import find_scripture_references
-from api_client import get_scripture_text
+from api_client import get_scripture_text, VerseNotFoundError
 
-def start_cli():
+async def process_input(text):
     """
-    Starts the command-line interface for the scripture projector.
+    Finds, fetches, and displays scripture references from a given text.
     """
-    print("Welcome to the Scripture Projector!")
-    print("Type a sentence containing a scripture reference (e.g., 'Show me John 3:16') or 'quit' to exit.")
+    references = find_scripture_references(text)
+    if not references:
+        print("No scripture reference found. Please try again.\n")
+        return
+
+    # Create a list of tasks to fetch all verses concurrently
+    tasks = [get_scripture_text(book.strip(), ref) for book, ref in references]
+
+    # Use asyncio.gather with return_exceptions=True to handle potential errors
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    # Display all fetched verses or errors
+    print("\n" + "="*50)
+    for (book, ref), result in zip(references, results):
+        book_title = book.strip().title()
+        if isinstance(result, VerseNotFoundError):
+            print(f"Error: Could not find '{book_title} {ref}'.")
+            print(f"  > The verse may not exist or the reference may be incorrect.\n")
+        elif isinstance(result, Exception):
+            print(f"An unexpected error occurred for '{book_title} {ref}': {result}\n")
+        else:
+            print(f"Displaying: {book_title} {ref}")
+            print("-" * 50)
+            print(f"{result}\n")
+    print("="*50)
+
+async def start_cli():
+    """
+    Starts the asynchronous command-line interface.
+    """
+    print("Welcome to the Async Scripture Projector!")
+    print("Type a sentence with scripture references (e.g., 'John 3:16 and Gen 1:99') or 'quit' to exit.\n")
 
     while True:
-        user_input = input("> ")
-        if user_input.lower() == 'quit':
+        try:
+            user_input = await asyncio.to_thread(input, "> ")
+            if user_input.lower() == "quit":
+                break
+            await process_input(user_input)
+        except (KeyboardInterrupt, EOFError):
+            print("\nExiting.")
             break
-
-        references = find_scripture_references(user_input)
-
-        if not references:
-            print("No scripture reference found. Please try again.")
-            continue
-
-        for book, reference in references:
-            # For now, we just fetch and print the first one found.
-            # In the future, we could handle multiple references.
-            scripture_text = get_scripture_text(book.strip(), reference)
-
-            # Simple formatting for projection
-            print("\n" + "="*50)
-            print(f"Displaying: {book.strip().title()} {reference}")
-            print("="*50)
-            print(f"\n{scripture_text}\n")
-            print("="*50)
-            break # Only handling the first found reference for now
