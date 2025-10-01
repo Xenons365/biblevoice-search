@@ -1,5 +1,6 @@
 import sqlite3
 import csv
+import argparse
 
 def import_verses_from_csv(db_path, csv_path):
     """
@@ -68,9 +69,18 @@ def import_verses_from_csv(db_path, csv_path):
         db_connection.close()
 
 if __name__ == '__main__':
-    # Define the paths for the database and the CSV file.
-    DATABASE_FILE = 'bible.db'
-    CSV_FILE = 'kjv_bible.csv'
+    # --- Argument Parsing ---
+    # Set up an argument parser to handle command-line inputs.
+    parser = argparse.ArgumentParser(description='Import Bible verses from a CSV file into a SQLite database.')
 
-    # Call the function to start the import process.
-    import_verses_from_csv(DATABASE_FILE, CSV_FILE)
+    # Define the command-line arguments.
+    # - 'csv_path': The path to the CSV file (required).
+    # - '--db-path': The path to the database file (optional, with a default value).
+    parser.add_argument('csv_path', help='The path to the CSV file containing the verses.')
+    parser.add_argument('--db-path', default='bible.db', help='The path to the SQLite database file (default: bible.db).')
+
+    # Parse the arguments provided by the user.
+    args = parser.parse_args()
+
+    # Call the import function with the parsed arguments.
+    import_verses_from_csv(args.db_path, args.csv_path)
