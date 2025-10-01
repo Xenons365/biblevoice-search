@@ -1,7 +1,9 @@
 import asyncio
 import tkinter as tk
+from tkinter import ttk
+from collections import deque
 from scripture_finder import find_scripture_references
-from api_client import get_scripture_text, VerseNotFoundError
+from data_manager import get_scripture_text, VerseNotFoundError, get_available_translations
 import sounddevice as sd
 import queue
 import threading
@@ -10,40 +12,72 @@ import os
 
 # This queue will hold the audio data from the microphone.
 q = queue.Queue()
+# A deque to hold the active verse widgets on screen.
+displayed_verses = deque()
+# A global variable to hold the selected translation from the dropdown.
+selected_translation = None
+
+# --- GUI Components ---
+
+class FadingLabel(tk.Label):
+    """A custom Label widget that can animate its foreground color."""
+    def fade(self, start_color, end_color, duration_ms, steps=30):
+        start_rgb = tuple(int(start_color.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
+        end_rgb = tuple(int(end_color.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
+        delta_rgb = [(end - start) / steps for start, end in zip(start_rgb, end_rgb)]
+        delay = duration_ms // steps
+
+        def animate_step(current_step):
+            if current_step > steps or not self.winfo_exists():
+                if self.winfo_exists(): self.config(fg=end_color)
+                return
+            new_rgb = [int(start + delta * current_step) for start, delta in zip(start_rgb, delta_rgb)]
+            new_color = f"#{new_rgb[0]:02x}{new_rgb[1]:02x}{new_rgb[2]:02x}"
+            if self.winfo_exists():
+                self.config(fg=new_color)
+                self.after(delay, animate_step, current_step + 1)
+        animate_step(1)
+
+class VerseWidget(tk.Frame):
+    """A custom widget to display a single scripture, with fading labels."""
+    def __init__(self, parent, book, ref, text, **kwargs):
+        super().__init__(parent, bg="black", **kwargs)
+        self.config(pady=20)
+        wraplength = parent.winfo_width() - 100
+        self.ref_label = FadingLabel(self, text=f"{book.title()} {ref}", font=("Helvetica", 36, "bold"), bg="black", fg="#000000", wraplength=wraplength, justify="left")
+        self.ref_label.pack(fill="x", padx=10, anchor="w")
+        self.text_label = FadingLabel(self, text=text, font=("Helvetica", 48), bg="black", fg="#000000", wraplength=wraplength, justify="left")
+        self.text_label.pack(fill="x", padx=10, pady=(10, 0), anchor="w")
+
+    def fade_in(self, duration=500):
+        self.ref_label.fade("#000000", "#FFFFFF", duration)
+        self.text_label.fade("#000000", "#FFFFFF", duration)
+
+    def fade_to_dim(self, duration=500):
+        DIM_COLOR = "#808080"
+        self.ref_label.fade("#FFFFFF", DIM_COLOR, duration)
+        self.text_label.fade("#FFFFFF", DIM_COLOR, duration)
 
 # --------------- Microphone Listener Thread ---------------
-
 def audio_callback(indata, frames, time, status):
-    """This is called (from a separate thread) for each audio chunk."""
-    if status:
-        print(status)
+    if status: print(status)
     q.put(bytes(indata))
 
 def start_listening(loop, model_path="model"):
-    """
-    Starts the microphone listener and the Vosk recognizer in a separate thread.
-    """
-    # Dynamically import vosk here to avoid making it a hard dependency for the CLI app.
     try:
         import vosk
     except ImportError:
-        print("Error: The 'vosk' library is required for voice recognition.")
-        print("Please install it using: pip install vosk")
+        display_message("Error: 'vosk' library not found. Please run: pip install vosk", is_error=True)
         return
 
     if not os.path.exists(model_path):
-        print(f"Error: Vosk model not found at '{model_path}'.")
-        print("Please download a model and place it in that directory.")
-        # Update the GUI to show the error
-        text_widget.delete("1.0", tk.END)
-        text_widget.insert(tk.END, f"Vosk model not found at '{model_path}'.\nPlease see README.md for setup instructions.")
+        display_message(f"Error: Vosk model not found at '{model_path}'.", is_error=True)
         return
 
     model = vosk.Model(model_path)
     rec = vosk.KaldiRecognizer(model, 16000)
 
     def recognizer_thread():
-        """This thread pulls audio data from the queue and feeds it to Vosk."""
         while True:
             data = q.get()
             if rec.AcceptWaveform(data):
@@ -51,56 +85,84 @@ def start_listening(loop, model_path="model"):
                 text = result.get("text", "")
                 if text:
                     print(f"Recognized: '{text}'")
-                    # Schedule the async processing on the main event loop
-                    asyncio.run_coroutine_threadsafe(process_text(text), loop)
+                    # Pass the currently selected translation to the processing function.
+                    asyncio.run_coroutine_threadsafe(process_text(text, selected_translation.get()), loop)
 
     threading.Thread(target=recognizer_thread, daemon=True).start()
 
     try:
-        # Start the sounddevice stream
         stream = sd.InputStream(callback=audio_callback, channels=1, samplerate=16000, blocksize=8000)
         stream.start()
         print("Microphone listener started.")
     except Exception as e:
-        print(f"Error starting audio stream: {e}")
-        text_widget.delete("1.0", tk.END)
-        text_widget.insert(tk.END, f"Error starting audio stream: {e}\n\nMake sure you have a microphone connected.")
-
+        display_message(f"Error starting audio stream: {e}", is_error=True)
 
 # --------------- GUI & Async Logic ---------------
 
-async def process_text(text):
-    """
-    Finds scripture references in the recognized text, fetches them concurrently,
-    and updates the GUI.
-    """
-    references = find_scripture_references(text)
-    if not references:
-        return
+def display_message(text, is_error=False):
+    for widget in list(displayed_verses): widget.destroy()
+    displayed_verses.clear()
+    color = "red" if is_error else "gray"
+    verse_container.update_idletasks()
+    wraplength = verse_container.winfo_width() - 100
+    widget = tk.Label(verse_container, text=text, font=("Helvetica", 24), bg="black", fg=color, wraplength=wraplength)
+    widget.pack(pady=50)
+    displayed_verses.append(widget)
 
-    # Fetch all verses concurrently and handle exceptions
-    tasks = [get_scripture_text(book.strip(), ref) for book, ref in references]
+async def process_text(text, translation="KJV"):
+    references = find_scripture_references(text)
+    if not references: return
+
+    if displayed_verses and isinstance(displayed_verses[0], tk.Label):
+        displayed_verses.popleft().destroy()
+
+    for verse_widget in displayed_verses:
+        if isinstance(verse_widget, VerseWidget):
+            verse_widget.fade_to_dim()
+
+    tasks = [get_scripture_text(book.strip(), ref, translation) for book, ref in references]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    # Clear the text widget and display the new results
-    text_widget.delete("1.0", tk.END)
-    for (book, ref), result in zip(references, results):
+    for (book, ref), result in reversed(list(zip(references, results))):
         book_title = book.strip().title()
-        if isinstance(result, VerseNotFoundError):
-            text_widget.insert(tk.END, f"Could not find: {book_title} {ref}\n\n")
-        elif isinstance(result, Exception):
-            text_widget.insert(tk.END, f"Error: {result}\n\n")
-        else:
-            text_widget.insert(tk.END, f"{book_title} {ref}\n{result}\n\n")
+        verse_text = str(result) if not isinstance(result, Exception) else f"Error: {result}"
 
-async def run_gui():
+        verse_widget = VerseWidget(verse_container, book_title, ref, verse_text)
+        verse_widget.pack(side="top", fill="x", anchor="n")
+        displayed_verses.appendleft(verse_widget)
+        verse_widget.fade_in()
+
+async def gui_update_loop():
     """The main async loop for the Tkinter GUI."""
-    loop = asyncio.get_event_loop()
-    start_listening(loop)
-
     while True:
-        root.update()
-        await asyncio.sleep(0.01)
+        try:
+            root.update()
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            await asyncio.sleep(0.01)
+        except tk.TclError:
+            break
+
+def on_mouse_wheel(event):
+    if event.num == 4 or event.delta > 0: canvas.yview_scroll(-1, "units")
+    elif event.num == 5 or event.delta < 0: canvas.yview_scroll(1, "units")
+
+async def main():
+    """Sets up the GUI and runs the main async event loop."""
+    loop = asyncio.get_event_loop()
+
+    # --- Populate Translation Dropdown ---
+    translations = await get_available_translations()
+    translation_dropdown['values'] = translations
+    # Set default to KJV if available, otherwise the first in the list.
+    if "KJV" in translations:
+        selected_translation.set("KJV")
+    elif translations:
+        selected_translation.set(translations[0])
+
+    # Start the microphone listener thread.
+    start_listening(loop)
+    # Start the GUI update loop.
+    await gui_update_loop()
 
 if __name__ == "__main__":
     root = tk.Tk()
@@ -108,10 +170,34 @@ if __name__ == "__main__":
     root.attributes("-fullscreen", True)
     root.configure(bg="black")
 
-    # --- Text Widget ---
-    text_widget = tk.Text(root, bg="black", fg="white", font=("Helvetica", 48), wrap=tk.WORD, relief=tk.FLAT, borderwidth=0, insertbackground="white")
-    text_widget.pack(expand=True, fill="both", padx=50, pady=50)
-    text_widget.insert(tk.END, "Listening for scripture references...")
+    # --- Scrollable Frame & Canvas ---
+    main_frame = tk.Frame(root, bg="black")
+    main_frame.pack(fill="both", expand=True)
+    canvas = tk.Canvas(main_frame, bg="black", highlightthickness=0)
+    verse_container = tk.Frame(canvas, bg="black")
+    canvas.create_window((0, 0), window=verse_container, anchor="nw")
+    canvas.pack(side="left", fill="both", expand=True, padx=(50, 0), pady=50)
+
+    # --- Scrollbar ---
+    scrollbar = ttk.Scrollbar(main_frame, orient="vertical", command=canvas.yview)
+    canvas.configure(yscrollcommand=scrollbar.set)
+    scrollbar.pack(side="right", fill="y", pady=50, padx=(0, 50))
+
+    # --- Translation Dropdown ---
+    selected_translation = tk.StringVar()
+    style = ttk.Style()
+    style.theme_use('clam')
+    # Configure the dropdown style for dark mode.
+    style.configure("TCombobox", fieldbackground="black", background="#333", foreground="white", arrowcolor="white", selectbackground="black", selectforeground="white", padding=(10, 5))
+    translation_dropdown = ttk.Combobox(root, textvariable=selected_translation, state="readonly", font=("Helvetica", 14), width=10)
+    translation_dropdown.place(relx=1.0, rely=0.0, x=-20, y=20, anchor="ne")
+
+    # Bind mouse wheel events for scrolling.
+    root.bind("<MouseWheel>", on_mouse_wheel)
+    root.bind("<Button-4>", on_mouse_wheel)
+    root.bind("<Button-5>", on_mouse_wheel)
+
+    display_message("Listening for scripture references...")
 
     # --- Exit Instructions ---
     exit_label = tk.Label(root, text="Press ESC to exit", font=("Helvetica", 14), bg="black", fg="gray")
@@ -119,8 +205,9 @@ if __name__ == "__main__":
     root.bind("<Escape>", lambda e: root.destroy())
 
     try:
-        asyncio.run(run_gui())
-    except KeyboardInterrupt:
+        asyncio.run(main())
+    except (KeyboardInterrupt, tk.TclError):
         print("\nExiting application.")
     finally:
-        root.destroy()
+        if root.winfo_exists():
+            root.destroy()
