@@ -2,5 +2,8 @@
 vosk
 sounddevice
 
+# For async database access
+aiosqlite
+
 # For potential future async http requests
 aiohttp
