@@ -89,35 +89,39 @@ def find_scripture_references(text):
     # The current regex has too many capturing groups, which makes the output of findall hard to parse.
     # Let's simplify the regex and the find_scripture_references function.
 
-    # Create a single regex for all book names and their abbreviations
+    # Create a single regex for all book names and their abbreviations.
     book_names_regex = []
     for book, abbrevs in BIBLE_BOOKS.items():
-        # Handle books that start with a number, like "1 Samuel"
+        # Handle books that start with a number (e.g., "1 Samuel", "2 Kings").
         if book[0].isdigit():
             num = book[0]
             name = book[2:]
 
-            # Add variations for the number, e.g., "1", "1st", "I"
-            # Making the regex for the number more flexible, using non-capturing groups
+            # Add regex variations for the number to match "1", "1st", etc.
+            # The `(?:...)` is a non-capturing group.
             book_names_regex.append(f"{num}(?:st|nd|rd|th)?\\s?{name}")
             for abbrev in abbrevs:
-                 # Also apply to abbreviations
+                 # Also apply the same logic to abbreviations of numbered books.
                  book_names_regex.append(f"{abbrev.replace('1', '1(?:st)?').replace('2', '2(?:nd)?').replace('3', '3(?:rd)?')}")
         else:
+            # For non-numbered books, just add the book name and its abbreviations.
             book_names_regex.append(book)
             book_names_regex.extend(abbrevs)
 
-    # Sort by length, longest first, to avoid partial matches (e.g., "John" before "1 John")
+    # Sort the list of book names by length in descending order.
+    # This is crucial to ensure the regex engine matches longer names first
+    # (e.g., "1 John" before "John").
     book_names_regex.sort(key=len, reverse=True)
 
     # Join all book names and abbreviations into a single regex pattern
     books_pattern = "|".join(book_names_regex)
 
-    # Regex to capture the full scripture reference
-    # It looks for a book name, followed by chapter and verse information.
-    # Example: "John 3:16", "1 Corinthians 13:4-7"
+    # Regex to capture the full scripture reference.
+    # It looks for a book name, followed by a complex chapter and verse pattern.
+    # Example: "John 3:16", "1 Corinthians 13:4-7", "Genesis 1:1,3-5"
+    verse_pattern = r"(\d{1,3}:\d{1,3}(?:-\d{1,3})?(?:,\s*\d{1,3}(?:-\d{1,3})?)*)"
     scripture_pattern = re.compile(
-        r"\b(" + books_pattern + r")\s+(\d{1,3}:\d{1,3}(?:-\d{1,3})?)\b",
+        r"\b(" + books_pattern + r")\s+" + verse_pattern + r"\b",
         re.IGNORECASE
     )
 
@@ -134,7 +138,8 @@ if __name__ == '__main__':
         "The verse is from 2 Tim 2:15",
         "No scripture here.",
         "This is a test for Rev 22:20-21",
-        "I need to see romans 8:28"
+        "I need to see romans 8:28",
+        "Let's check Genesis 1:1,3-5 and John 3:16"
     ]
 
     for s in test_strings:

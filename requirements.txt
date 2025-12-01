@@ -2,5 +2,5 @@
 vosk
 sounddevice
 
-# For potential future async http requests
-aiohttp
+# For asynchronous SQLite database operations
+aiosqlite

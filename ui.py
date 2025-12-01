@@ -1,6 +1,6 @@
 import asyncio
 from scripture_finder import find_scripture_references
-from api_client import get_scripture_text, VerseNotFoundError
+from data_manager import get_scripture_text, VerseNotFoundError
 
 async def process_input(text):
     """
