@@ -50,10 +50,22 @@ The voice-controlled GUI requires a language model from **Vosk**.
     │   ├── am/
     │   ├── conf/
     │   └── ... (other model files)
-    ├── api_client.py
+    ├── data_manager.py
     ├── projector_gui.py
     └── ... (other project files)
     ```
+
+### 5. Initialize and Populate the Database
+
+The application uses a local SQLite database. You must run the setup and import scripts to use the application.
+
+```bash
+# First, create the database schema
+python database_setup.py
+
+# Then, import the verse data from the CSV file
+python database_import.py
+```
 
 ---
 
@@ -71,7 +83,7 @@ You can then type sentences containing scripture references and press Enter. Typ
 
 ### Graphical User Interface (GUI)
 
-To run the fullscreen, voice-controlled version, make sure you have completed the model download step above and have a microphone connected. Then, run the `projector_gui.py` file:
+To run the fullscreen, voice-controlled version, make sure you have completed the model download and database setup steps above and have a microphone connected. Then, run the `projector_gui.py` file:
 
 ```bash
 python projector_gui.py
@@ -81,48 +93,15 @@ The application will open in fullscreen and start listening for voice commands. 
 
 ---
 
-## Connecting to a Real API
+## Database and Data Management
 
-This project uses a **mock API client** (`api_client.py`) to simulate fetching scripture data. To connect to a real Bible API, you will need to modify the `_fetch_from_api` function inside `api_client.py`.
+This project uses `data_manager.py` to handle all interactions with the `bible.db` SQLite database. It uses the `aiosqlite` library for non-blocking database operations, which is essential for a responsive GUI.
 
-Here is an example of how you might change it to use a real API with the `aiohttp` library:
-
-1.  **Identify your API's URL and structure.** For this example, let's assume the API endpoint is `https://my.bible-api.com/v1/scripture?ref={BOOK}+{CHAPTER}:{VERSE}` and it returns JSON like `{"text": "For God so loved the world..."}`.
-
-2.  **Modify the `_fetch_from_api` function:**
-
-    ```python
-    import aiohttp
-
-    async def _fetch_from_api(book, reference):
-        """The internal function that performs the actual fetch."""
-        # Note: You may need to install aiohttp if you haven't already:
-        # pip install aiohttp
-
-        api_url = f"https://my.bible-api.com/v1/scripture?ref={book}+{reference}"
-
-        print(f"Fetching {book} {reference} from {api_url}...")
-
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(api_url) as response:
-                    if response.status != 200:
-                        raise VerseNotFoundError(f"API returned status {response.status} for '{book} {reference}'.")
-
-                    data = await response.json()
-
-                    if "text" not in data or not data["text"]:
-                        raise VerseNotFoundError(f"Verse '{book} {reference}' not found in API response.")
-
-                    return data["text"]
-        except aiohttp.ClientError as e:
-            # Handle network-related errors
-            raise VerseNotFoundError(f"Network error for '{book} {reference}': {e}")
-        except Exception as e:
-            # Handle other unexpected errors, like invalid JSON
-            raise VerseNotFoundError(f"An unexpected error occurred for '{book} {reference}': {e}")
-
-    ```
+Key features of the data manager include:
+- **Asynchronous Fetching:** All database queries are async to avoid freezing the application.
+- **Verse Range Support:** Can fetch single verses (`John 3:16`) and ranges (`1 Corinthians 13:4-7`).
+- **In-Memory Caching:** Recently accessed verses are cached to minimize database load and improve performance.
+- **Race Condition Protection:** Prevents multiple identical queries from running at the same time.
 
 ## Projector and Sound System Setup
 
