@@ -1,6 +1,6 @@
 import asyncio
 from scripture_finder import find_scripture_references
-from api_client import get_scripture_text, VerseNotFoundError
+from data_manager import get_scripture_text, VerseNotFoundError
 
 async def process_input(text):
     """
@@ -21,9 +21,9 @@ async def process_input(text):
     print("\n" + "="*50)
     for (book, ref), result in zip(references, results):
         book_title = book.strip().title()
-        if isinstance(result, VerseNotFoundError):
+        if isinstance(result, (VerseNotFoundError, FileNotFoundError)):
             print(f"Error: Could not find '{book_title} {ref}'.")
-            print(f"  > The verse may not exist or the reference may be incorrect.\n")
+            print(f"  > {result}\n")
         elif isinstance(result, Exception):
             print(f"An unexpected error occurred for '{book_title} {ref}': {result}\n")
         else:
@@ -37,7 +37,7 @@ async def start_cli():
     Starts the asynchronous command-line interface.
     """
     print("Welcome to the Async Scripture Projector!")
-    print("Type a sentence with scripture references (e.g., 'John 3:16 and Gen 1:99') or 'quit' to exit.\n")
+    print("Type a sentence with scripture references (e.g., 'John 3:16 and Gen 1:1') or 'quit' to exit.\n")
 
     while True:
         try:

@@ -1,7 +1,8 @@
 import asyncio
 import tkinter as tk
 from scripture_finder import find_scripture_references
-from api_client import get_scripture_text, VerseNotFoundError
+from data_manager import get_scripture_text, VerseNotFoundError
+from fading_text import FadingText
 import sounddevice as sd
 import queue
 import threading
@@ -23,20 +24,19 @@ def start_listening(loop, model_path="model"):
     """
     Starts the microphone listener and the Vosk recognizer in a separate thread.
     """
-    # Dynamically import vosk here to avoid making it a hard dependency for the CLI app.
     try:
         import vosk
     except ImportError:
         print("Error: The 'vosk' library is required for voice recognition.")
-        print("Please install it using: pip install vosk")
+        text_widget.delete("1.0", tk.END)
+        text_widget.insert(tk.END, "Vosk library not found. Please run: pip install vosk")
         return
 
     if not os.path.exists(model_path):
-        print(f"Error: Vosk model not found at '{model_path}'.")
-        print("Please download a model and place it in that directory.")
-        # Update the GUI to show the error
+        error_msg = f"Vosk model not found at '{model_path}'.\nPlease see README.md for setup instructions."
+        print(f"Error: {error_msg}")
         text_widget.delete("1.0", tk.END)
-        text_widget.insert(tk.END, f"Vosk model not found at '{model_path}'.\nPlease see README.md for setup instructions.")
+        text_widget.insert(tk.END, error_msg)
         return
 
     model = vosk.Model(model_path)
@@ -57,41 +57,43 @@ def start_listening(loop, model_path="model"):
     threading.Thread(target=recognizer_thread, daemon=True).start()
 
     try:
-        # Start the sounddevice stream
         stream = sd.InputStream(callback=audio_callback, channels=1, samplerate=16000, blocksize=8000)
         stream.start()
         print("Microphone listener started.")
     except Exception as e:
-        print(f"Error starting audio stream: {e}")
+        error_msg = f"Error starting audio stream: {e}\n\nMake sure you have a microphone connected."
+        print(error_msg)
         text_widget.delete("1.0", tk.END)
-        text_widget.insert(tk.END, f"Error starting audio stream: {e}\n\nMake sure you have a microphone connected.")
+        text_widget.insert(tk.END, error_msg)
 
 
 # --------------- GUI & Async Logic ---------------
 
 async def process_text(text):
     """
-    Finds scripture references in the recognized text, fetches them concurrently,
-    and updates the GUI.
+    Finds scripture references, fetches them, and updates the GUI with a fade effect.
     """
     references = find_scripture_references(text)
     if not references:
         return
 
-    # Fetch all verses concurrently and handle exceptions
+    # Fetch all verses concurrently
     tasks = [get_scripture_text(book.strip(), ref) for book, ref in references]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    # Clear the text widget and display the new results
-    text_widget.delete("1.0", tk.END)
+    # Build the full text to display
+    display_text = ""
     for (book, ref), result in zip(references, results):
         book_title = book.strip().title()
-        if isinstance(result, VerseNotFoundError):
-            text_widget.insert(tk.END, f"Could not find: {book_title} {ref}\n\n")
+        if isinstance(result, (VerseNotFoundError, FileNotFoundError)):
+            display_text += f"Could not find: {book_title} {ref}\n\n"
         elif isinstance(result, Exception):
-            text_widget.insert(tk.END, f"Error: {result}\n\n")
+            display_text += f"Error: {result}\n\n"
         else:
-            text_widget.insert(tk.END, f"{book_title} {ref}\n{result}\n\n")
+            display_text += f"{book_title} {ref}\n{result}\n\n"
+
+    # Use the FadingText widget's method to change text with animation
+    await text_widget.change_text(display_text.strip())
 
 async def run_gui():
     """The main async loop for the Tkinter GUI."""
@@ -99,8 +101,12 @@ async def run_gui():
     start_listening(loop)
 
     while True:
-        root.update()
-        await asyncio.sleep(0.01)
+        try:
+            root.update()
+            await asyncio.sleep(0.01)
+        except tk.TclError:
+            # This happens when the window is closed
+            break
 
 if __name__ == "__main__":
     root = tk.Tk()
@@ -108,8 +114,11 @@ if __name__ == "__main__":
     root.attributes("-fullscreen", True)
     root.configure(bg="black")
 
-    # --- Text Widget ---
-    text_widget = tk.Text(root, bg="black", fg="white", font=("Helvetica", 48), wrap=tk.WORD, relief=tk.FLAT, borderwidth=0, insertbackground="white")
+    # --- Use the new FadingText Widget ---
+    text_widget = FadingText(
+        root, bg="black", fg="white", font=("Helvetica", 48),
+        wrap=tk.WORD, relief=tk.FLAT, borderwidth=0, insertbackground="white"
+    )
     text_widget.pack(expand=True, fill="both", padx=50, pady=50)
     text_widget.insert(tk.END, "Listening for scripture references...")
 
@@ -123,4 +132,5 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("\nExiting application.")
     finally:
-        root.destroy()
+        if root.winfo_exists():
+            root.destroy()
