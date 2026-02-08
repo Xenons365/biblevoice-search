@@ -113,15 +113,55 @@ def find_scripture_references(text):
     # Join all book names and abbreviations into a single regex pattern
     books_pattern = "|".join(book_names_regex)
 
-    # Regex to capture the full scripture reference
-    # It looks for a book name, followed by chapter and verse information.
-    # Example: "John 3:16", "1 Corinthians 13:4-7"
+    # Regex to capture the full scripture reference.
+    # It now supports single verses, ranges, and comma-separated lists.
+    # Example: "John 3:16", "1 Corinthians 13:4-7", "Genesis 1:1,3,5-7"
     scripture_pattern = re.compile(
-        r"\b(" + books_pattern + r")\s+(\d{1,3}:\d{1,3}(?:-\d{1,3})?)\b",
+        # A book name, followed by a space, then chapter:verses
+        # The verse part handles complex combinations like 1:1-3,5,7-9
+        r"\b(" + books_pattern + r")\s+"
+        r"(\d{1,3}:\d{1,3}(?:-\d{1,3})?(?:,\s*\d{1,3}(?:-\d{1,3})?)*)\b",
         re.IGNORECASE
     )
 
     return scripture_pattern.findall(text)
+
+
+def parse_and_expand_reference(reference_string):
+    """
+    Parses a reference string like "3:16-18,21" into chapter and a list of verses.
+    Returns (chapter, [verse1, verse2, ...])
+    """
+    try:
+        chapter_str, verses_str = reference_string.split(':', 1)
+        chapter = int(chapter_str)
+    except ValueError:
+        # Handle cases where the reference string is not in the expected format
+        return None, []
+
+    verses = set()
+    parts = verses_str.split(',')
+    for part in parts:
+        part = part.strip()
+        if not part:
+            continue
+
+        if '-' in part:
+            try:
+                start, end = map(int, part.split('-'))
+                if start > end:
+                    continue  # Skip invalid ranges like 10-5
+                verses.update(range(start, end + 1))
+            except ValueError:
+                continue  # Skip malformed parts like '5-' or '-'
+        else:
+            try:
+                verses.add(int(part))
+            except ValueError:
+                continue # Skip non-integer parts
+
+    return chapter, sorted(list(verses))
+
 
 # Example usage and testing:
 if __name__ == '__main__':
@@ -134,7 +174,12 @@ if __name__ == '__main__':
         "The verse is from 2 Tim 2:15",
         "No scripture here.",
         "This is a test for Rev 22:20-21",
-        "I need to see romans 8:28"
+        "I need to see romans 8:28",
+        # New test cases for complex references
+        "Show me John 3:16,18.",
+        "Let's check Genesis 1:1-3,5 and Exodus 12:1-4.",
+        "I need to see 1 John 1:9, 10-12, 14",
+        "How about Romans 12:1-2, 5, 9-10"
     ]
 
     for s in test_strings:

@@ -1,4 +1,6 @@
 import asyncio
+import re
+from database import get_verse, get_verses_in_range
 
 # Custom exception for API errors
 class VerseNotFoundError(Exception):
@@ -9,23 +11,48 @@ scripture_cache = {}
 # Dictionary to track in-flight requests to prevent race conditions
 ongoing_fetches = {}
 
-async def _fetch_from_api(book, reference):
-    """The internal function that performs the actual fetch."""
-    print(f"Cache miss. Fetching {book} {reference} from API...")
-    await asyncio.sleep(1)  # Simulate non-blocking network delay
+async def _fetch_from_db(book, reference):
+    """
+    The internal function that performs the actual fetch from the SQLite database.
+    This is now a non-blocking, async function.
+    """
+    print(f"Cache miss. Fetching {book} {reference} from database...")
 
-    if "99" in reference:
-        print(f"API error: Verse {book} {reference} not found.")
-        raise VerseNotFoundError(f"The verse '{book} {reference}' could not be found.")
+    # Regex to parse chapter, verse, and optional end_verse
+    match = re.match(r"(\d+):(\d+)(?:-(\d+))?", reference)
+    if not match:
+        raise VerseNotFoundError(f"Invalid reference format: {reference}")
 
-    return f'"{book} {reference}" - This is the mock text for the scripture.'
+    chapter = int(match.group(1))
+    start_verse = int(match.group(2))
+    end_verse = match.group(3)
+
+    try:
+        if end_verse:
+            # This is a range query
+            end_verse = int(end_verse)
+            verses = await asyncio.to_thread(get_verses_in_range, book, chapter, start_verse, end_verse)
+            if not verses:
+                raise VerseNotFoundError(f"Verses {book} {reference} not found.")
+            # Format the output for a range
+            return "\n".join(f"{book} {chapter}:{start_verse+i} {text}" for i, text in enumerate(verses))
+        else:
+            # This is a single verse query
+            verse_text = await asyncio.to_thread(get_verse, book, chapter, start_verse)
+            if "not found" in verse_text: # Check for the not found message from the db function
+                raise VerseNotFoundError(f"Verse {book} {reference} not found.")
+            return verse_text
+    except Exception as e:
+        # Catch any other database-related errors
+        raise VerseNotFoundError(f"An error occurred while fetching {book} {reference}: {e}")
+
 
 async def get_scripture_text(book, reference):
     """
-    Asynchronously gets scripture text, with caching, error handling,
+    Asynchronously gets scripture text from the local database, with caching
     and protection against race conditions.
     """
-    cache_key = f"{book.lower()}:{reference}"
+    cache_key = f"{book.lower().strip()}:{reference.strip()}"
 
     if cache_key in scripture_cache:
         print(f"Cache hit for {book} {reference}.")
@@ -39,7 +66,7 @@ async def get_scripture_text(book, reference):
         return await ongoing_fetches[cache_key]
 
     # No cache hit and no ongoing fetch, so create a new one.
-    task = asyncio.create_task(_fetch_from_api(book, reference))
+    task = asyncio.create_task(_fetch_from_db(book, reference))
     ongoing_fetches[cache_key] = task
 
     try:
@@ -54,23 +81,31 @@ async def get_scripture_text(book, reference):
         del ongoing_fetches[cache_key]
 
 async def main():
-    # Example usage to demonstrate async functionality:
-    print("--- Requesting multiple verses concurrently ---")
+    # Example usage to demonstrate async functionality with the new database backend
+    print("--- Requesting multiple verses concurrently from the database ---")
 
     async def fetch_and_print(book, ref):
         try:
             text = await get_scripture_text(book, ref)
-            print(f"Success for {book} {ref}: {text}")
+            print(f"\nSuccess for {book} {ref}:\n{text}")
         except VerseNotFoundError as e:
-            print(f"Error for {book} {ref}: {e}")
+            print(f"\nError for {book} {ref}: {e}")
 
+    # Create a list of tasks to run concurrently
     tasks = [
         fetch_and_print("John", "3:16"),
-        fetch_and_print("Genesis", "1:99"),
-        fetch_and_print("John", "3:16"), # This should now wait for the first fetch
+        fetch_and_print("Genesis", "1:1-3"),      # A range of verses
+        fetch_and_print("John", "3:16"),          # This should be a cache hit
+        fetch_and_print("NonExistentBook", "1:1"),# This should fail
+        fetch_and_print("Psalms", "23:1-6"),      # Another range
     ]
 
     await asyncio.gather(*tasks)
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    # Before running, ensure the database exists.
+    import os
+    if not os.path.exists("bible.db"):
+        print("Database not found. Please run 'python database.py' to create it first.")
+    else:
+        asyncio.run(main())
